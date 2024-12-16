@@ -6,8 +6,8 @@ module bada::bada{
     use sui::dynamic_object_field as dof;
     // use sui::dynamic_field as df;
     use sui::coin::{Self, Coin};
-    use sui::sui::{Self, SUI};
-    use sui::balance::{Self, Balance};
+    use sui::sui::SUI;
+    use sui::balance::Balance;
     use std::type_name::{Self,};
     use std::debug;
     // use sui::package;
@@ -18,6 +18,7 @@ module bada::bada{
     const ECategoryIsNotEmpty: u64 = 3;
     const EInvalidPrice: u64 = 4;
     const EAddressBidded: u64 = 5;
+    const EInvalidBid: u64 = 6;
 
     public struct BadaMarketPlace has key{
         id: UID,
@@ -72,6 +73,11 @@ module bada::bada{
         category: ID,
     }
 
+    public struct BadaMarketPlaceItemBidIdx has store{
+        index : u64,
+        bid :  Balance<SUI>,
+    }
+
     public struct BadaMarketPlaceItemBuy has copy, drop{
         id : ID,
         item_id : ID,
@@ -81,14 +87,28 @@ module bada::bada{
         buyer : address
     }
 
-    public struct BadaMarketPlaceBid has key, store {
+    public struct BadaMarketPlaceItemBid has key, store {
         id: UID,
         bidder: address,
         amount:  u64,
         item_id: ID,
     }
 
-    public struct BadaMarketPlaceBidPlaced has copy, drop {
+    public struct BadaMarketPlaceItemBidPlaced has copy, drop {
+        id: ID,
+        item_id: ID,
+        bidder: address,
+        amount: u64,
+    }
+
+    public struct BadaMarketPlaceItemBidCanceled has copy, drop {
+        id: ID,
+        item_id: ID,
+        bidder: address,
+        amount: u64,
+    }
+
+    public struct BadaMarketPlaceItemBidAccepted has copy, drop {
         id: ID,
         item_id: ID,
         bidder: address,
@@ -203,20 +223,21 @@ module bada::bada{
 
         let item: T = dof::remove(&mut marketplace_item_listing.id, b"item");
 
-        let BadaMarketPlaceItemListing {id, owner, price, category_name, bids, bidders} = marketplace_item_listing;
+        // let BadaMarketPlaceItemListing {id, owner, price, category_name, bids, bidders: _} = marketplace_item_listing;
 
         event::emit(BadaMarketPlaceItemListingRemoved {
-            id: id.uid_to_inner(),
+            id: marketplace_item_listing.id.uid_to_inner(),
             item_id: object::id(&item),
-            category_name,
-            owner,
-            price
+            category_name : marketplace_item_listing.category_name,
+            owner: marketplace_item_listing.owner,
+            price: marketplace_item_listing.price,
         });
-        remove_item(market_place, &id);
-        id.delete();
+        
+        return_bids(market_place,marketplace_item_listing, true, ctx);
+        // id.delete();
 
         transfer::public_transfer(item, sender);
-        bids.destroy_empty();
+        // bids.destroy_empty();
     }
 
     fun remove_item(market_place: &mut BadaMarketPlace, id: &UID){
@@ -236,45 +257,51 @@ module bada::bada{
         };
     }
 
-    public fun buy_item<T: key + store>(market_place: &mut BadaMarketPlace, mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, payment_coin: Coin<SUI>, ctx: &mut TxContext){
+    public fun buy_item<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, payment_coin: Coin<SUI>, ctx: &mut TxContext){
         let item : T = dof::remove(&mut marketplace_item_listing.id, b"item");
 
-        let BadaMarketPlaceItemListing {id, owner, price, category_name, bids, bidders} = marketplace_item_listing;
+        // let BadaMarketPlaceItemListing {id, owner, price, category_name, bids, bidders: _} = marketplace_item_listing;
 
-        assert!(payment_coin.value() == price, EInvalidPrice);
+        assert!(payment_coin.value() == marketplace_item_listing.price, EInvalidPrice);
 
         event::emit(BadaMarketPlaceItemBuy {
-            id: id.uid_to_inner(),
+            id: marketplace_item_listing.id.uid_to_inner(),
             item_id: object::id(&item),
-            category_name: category_name,
-            creator: owner,
-            price: price,
+            category_name: marketplace_item_listing.category_name,
+            creator: marketplace_item_listing.owner,
+            price: marketplace_item_listing.price,
             buyer: ctx.sender(),
         });
 
-        // remove_item(market_place, &id);
-        transfer::public_transfer(payment_coin, owner);
-        id.delete();
-        bids.destroy_empty();
+        // remove_item(market_place, &marketplace_item_listing.id);
+        transfer::public_transfer(payment_coin, marketplace_item_listing.owner);
+        // id.delete();
+        // bids.destroy_empty();
 
         transfer::public_transfer(item, ctx.sender());
+        return_bids(market_place,marketplace_item_listing, false, ctx);
     }
 
     public fun make_bid<T: key + store>(marketplace_item_listing: &mut BadaMarketPlaceItemListing<T>, payment_coin: Coin<SUI>, ctx: &mut TxContext){
         let sender = ctx.sender();
         assert!(!bag::contains(&marketplace_item_listing.bids, sender), EAddressBidded);
 
-        let bid = BadaMarketPlaceBid {
+        let bid = BadaMarketPlaceItemBid {
             id: object::new(ctx),
             bidder: sender,
             amount: payment_coin.value(),
             item_id: object::id(marketplace_item_listing),
         };
 
-        marketplace_item_listing.bids.add(sender, payment_coin.into_balance());
+        let idx = BadaMarketPlaceItemBidIdx{
+            index: marketplace_item_listing.bidders.length(),
+            bid: payment_coin.into_balance(),
+        };
+
+        marketplace_item_listing.bids.add(sender, idx);
         marketplace_item_listing.bidders.push_back(sender);
 
-        event::emit(BadaMarketPlaceBidPlaced {
+        event::emit(BadaMarketPlaceItemBidPlaced {
             id: object::id(&bid),
             item_id: object::id(marketplace_item_listing),
             bidder: sender,
@@ -284,8 +311,92 @@ module bada::bada{
         transfer::public_share_object(bid);
     }
 
-    fun return_bids(market_place: &mut BadaMarketPlace){
-        
+    public fun cancel_bid<T: key + store>(marketplace_item_listing: &mut BadaMarketPlaceItemListing<T>, bid: BadaMarketPlaceItemBid, ctx: &mut TxContext){
+        let sender = ctx.sender();
+        assert!(marketplace_item_listing.bidders.contains(&sender) && bid.bidder == sender, EInvalidBid);
+
+        let BadaMarketPlaceItemBid {id, bidder, amount, item_id: _} = bid;
+
+        event::emit(BadaMarketPlaceItemBidCanceled {
+            id: id.uid_to_inner(),
+            item_id: object::id(marketplace_item_listing),
+            bidder,
+            amount,
+        });
+
+        return_bid(marketplace_item_listing, ctx);
+        id.delete();
+    }
+
+    #[allow(lint(self_transfer))]
+    fun return_bid<T: key + store>(marketplace_item_listing: &mut BadaMarketPlaceItemListing<T>, ctx: &mut TxContext){
+        let sender = ctx.sender();
+        let idx : BadaMarketPlaceItemBidIdx = marketplace_item_listing.bids.remove(sender);
+
+        marketplace_item_listing.bidders.swap_remove(idx.index);
+        let BadaMarketPlaceItemBidIdx {index, mut bid} = idx;
+
+        let bidders_length = marketplace_item_listing.bidders.length();
+        if (bidders_length > 0 && bidders_length != index){
+            let moved_bidder_address = marketplace_item_listing.bidders.borrow(index);
+
+            let moved_bidder: BadaMarketPlaceItemBidIdx = marketplace_item_listing.bids.remove(*moved_bidder_address);
+            marketplace_item_listing.bids.add(*moved_bidder_address, moved_bidder);
+        };
+        let amount = bid.value();
+        let balance = coin::take(&mut bid, amount, ctx);
+        transfer::public_transfer(balance, sender);
+
+        bid.destroy_zero();
+    }
+
+    public fun accept_bid<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, bid: BadaMarketPlaceItemBid, ctx: &mut TxContext){
+        assert!(ctx.sender() == marketplace_item_listing.owner, ENotOwner);
+
+        let item : T = dof::remove(&mut marketplace_item_listing.id, b"item");
+        let BadaMarketPlaceItemBid {id, bidder, amount, item_id: _} = bid;
+
+        event::emit(BadaMarketPlaceItemBidAccepted {
+            id: id.uid_to_inner(),
+            item_id: object::id(&item),
+            bidder,
+            amount,
+        });
+
+        let idx : BadaMarketPlaceItemBidIdx = marketplace_item_listing.bids.remove(bidder);
+        let BadaMarketPlaceItemBidIdx {index, mut bid} = idx;
+        marketplace_item_listing.bidders.remove(index);
+
+        let amount = bid.value();
+        let balance = coin::take(&mut bid, amount, ctx);
+        transfer::public_transfer(item, bidder);
+        transfer::public_transfer(balance, marketplace_item_listing.owner);
+        bid.destroy_zero();
+        id.delete();
+        return_bids(market_place,marketplace_item_listing, false, ctx);
+    }
+
+    fun return_bids<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, remove_items: bool, ctx : &mut TxContext){
+        let mut bidders = marketplace_item_listing.bidders;
+
+        let mut i = 0;
+        while(i < bidders.length()){
+            let bidder = bidders.remove(i);
+            let idx : BadaMarketPlaceItemBidIdx = marketplace_item_listing.bids.remove(bidder);
+            let BadaMarketPlaceItemBidIdx {index: _, mut bid} = idx;
+
+            let amount = bid.value();
+            let balance = coin::take(&mut bid, amount, ctx);
+            transfer::public_transfer(balance, bidder);
+            i = i + 1;
+            bid.destroy_zero();
+        };
+
+        remove_item(market_place, &marketplace_item_listing.id);
+
+        let BadaMarketPlaceItemListing {id, owner: _, price: _, category_name: _, bids, bidders: _} = marketplace_item_listing;
+        id.delete();
+        bids.destroy_empty();
     }
 
     // #[test_only]
