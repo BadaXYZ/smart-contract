@@ -24,7 +24,7 @@ module bada::bada{
         id: UID,
         creator: address,
         idx: bag::Bag,
-        categories: vector<ID>,
+        categories: vector<String>,
     }
 
     public struct BadaMarketPlaceCategory has key, store{
@@ -70,7 +70,7 @@ module bada::bada{
 
     public struct BadaMarketPlaceItemIdx has copy, drop, store{
         index : u64,
-        category: ID,
+        category: String,
     }
 
     public struct BadaMarketPlaceItemBidIdx has store{
@@ -129,24 +129,7 @@ module bada::bada{
         transfer::share_object(bada_marketplace);
     }
 
-    // public fun create_category(market_place: &mut BadaMarketPlace, name: String, ctx: &mut TxContext){
-    //     assert!(market_place.creator == ctx.sender(), ENotOwner);
-    //     assert!(!dof::exists_(&market_place.id, name), ECategoryExists);
-    //     let category : BadaMarketPlaceCategory = BadaMarketPlaceCategory{
-    //         id: object::new(ctx),
-    //         name,
-    //         items: vector::empty(),
-    //     };
-    //     event::emit(BadaMarketPlaceCategoryCreated {
-    //         id: object::id(&category),
-    //         name: name
-    //     });
-    //     market_place.idx.add(category.id.uid_to_inner(), market_place.categories.length());
-    //     market_place.categories.push_back(category.id.uid_to_inner());
-    //     dof::add(&mut market_place.id, category.id.uid_to_inner(), category); 
-    // }
-
-    public fun create_category(market_place: &mut BadaMarketPlace, name: String, ctx: &mut TxContext) : BadaMarketPlaceCategory{
+    public fun create_category(market_place: &mut BadaMarketPlace, name: String, ctx: &mut TxContext){
         assert!(market_place.creator == ctx.sender(), ENotOwner);
         assert!(!dof::exists_(&market_place.id, name), ECategoryExists);
         let category : BadaMarketPlaceCategory = BadaMarketPlaceCategory{
@@ -154,42 +137,48 @@ module bada::bada{
             name,
             items: vector::empty(),
         };
-        // debug::print(&category);
         event::emit(BadaMarketPlaceCategoryCreated {
             id: object::id(&category),
             name: name
         });
-        market_place.idx.add(category.id.uid_to_inner(), market_place.categories.length());
-        market_place.categories.push_back(category.id.uid_to_inner());
-        category 
+        market_place.idx.add(category.name, market_place.categories.length());
+        market_place.categories.push_back(category.name);
+        dof::add(&mut market_place.id, category.name, category);
     }
 
-    public fun remove_category(market_place: &mut BadaMarketPlace, category : BadaMarketPlaceCategory, ctx: &mut TxContext){
+    public fun remove_category(market_place: &mut BadaMarketPlace, category_name: String, ctx: &mut TxContext){
         assert!(market_place.creator == ctx.sender(), ENotOwner);
+        let category : &BadaMarketPlaceCategory = dof::borrow(&market_place.id, category_name);
         assert!(category.items.length() == 0, ECategoryIsNotEmpty);
 
-        let removed_category : BadaMarketPlaceCategory = dof::remove(&mut market_place.id, category.id.uid_to_inner());
-
-        let BadaMarketPlaceCategory {id, name, items: _, } = category;
+        let removed_category : BadaMarketPlaceCategory = dof::remove(&mut market_place.id, category_name);
 
         event::emit(BadaMarketPlaceCategoryRemoved {
-            id: id.uid_to_inner(),
-            name: name,
+            id: removed_category.id.uid_to_inner(),
+            name: removed_category.name,
         });
-
-        id.delete();
 
         let BadaMarketPlaceCategory {id, name: _, items: _, } = removed_category;
         id.delete();
+
+        let idx: u64 = market_place.idx.remove(category_name);
+        market_place.categories.swap_remove(idx);
+        let categories_length = market_place.categories.length();
+        if (categories_length > 0 && categories_length != idx){
+            let moved_category = market_place.categories.borrow(idx);
+
+            let _: u64 = market_place.idx.remove(*moved_category);
+            market_place.idx.add(*moved_category, idx);
+        };
     }
 
-    public fun list_item<T: key + store>(market_place: &mut BadaMarketPlace, item: T, category : &mut BadaMarketPlaceCategory, price: u64, ctx: &mut TxContext){
-        let nft_name = type_name::get<T>();
-        debug::print(&nft_name);
+    public fun list_item<T: key + store>(market_place: &mut BadaMarketPlace, item: T, category_name: String, price: u64, ctx: &mut TxContext){
+        // let nft_name = type_name::get<T>();
+        // debug::print(&nft_name);
 
-        // assert!(dof::exists_(&market_place.id, category.name), ECategoryDoesNotExists);
+        assert!(dof::exists_(&market_place.id, category_name), ECategoryDoesNotExists);
         let sender = ctx.sender();
-        
+        let category : &mut BadaMarketPlaceCategory = dof::borrow_mut(&mut market_place.id, category_name);
         let mut bada_marketplace_item_listing : BadaMarketPlaceItemListing<T> = BadaMarketPlaceItemListing{
             id: object::new(ctx),
             price,
@@ -209,7 +198,7 @@ module bada::bada{
 
         let idx = BadaMarketPlaceItemIdx{
             index,
-            category: category.id.uid_to_inner(),
+            category: category.name,
         };
 
         category.items.push_back(object::id(&bada_marketplace_item_listing));
@@ -233,7 +222,7 @@ module bada::bada{
             price: marketplace_item_listing.price,
         });
         
-        return_bids(market_place,marketplace_item_listing, true, ctx);
+        return_bids(market_place,marketplace_item_listing, ctx);
         // id.delete();
 
         transfer::public_transfer(item, sender);
@@ -243,7 +232,6 @@ module bada::bada{
     fun remove_item(market_place: &mut BadaMarketPlace, id: &UID){
         let idx: BadaMarketPlaceItemIdx = market_place.idx.remove(id.uid_to_inner());
         let category : &mut BadaMarketPlaceCategory = dof::borrow_mut(&mut market_place.id, idx.category);
-
         category.items.swap_remove(idx.index);
 
         let items_length = category.items.length();
@@ -259,7 +247,6 @@ module bada::bada{
 
     public fun buy_item<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, payment_coin: Coin<SUI>, ctx: &mut TxContext){
         let item : T = dof::remove(&mut marketplace_item_listing.id, b"item");
-
         // let BadaMarketPlaceItemListing {id, owner, price, category_name, bids, bidders: _} = marketplace_item_listing;
 
         assert!(payment_coin.value() == marketplace_item_listing.price, EInvalidPrice);
@@ -279,7 +266,7 @@ module bada::bada{
         // bids.destroy_empty();
 
         transfer::public_transfer(item, ctx.sender());
-        return_bids(market_place,marketplace_item_listing, false, ctx);
+        return_bids(market_place,marketplace_item_listing, ctx);
     }
 
     public fun make_bid<T: key + store>(marketplace_item_listing: &mut BadaMarketPlaceItemListing<T>, payment_coin: Coin<SUI>, ctx: &mut TxContext){
@@ -373,12 +360,11 @@ module bada::bada{
         transfer::public_transfer(balance, marketplace_item_listing.owner);
         bid.destroy_zero();
         id.delete();
-        return_bids(market_place,marketplace_item_listing, false, ctx);
+        return_bids(market_place,marketplace_item_listing, ctx);
     }
 
-    fun return_bids<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, remove_items: bool, ctx : &mut TxContext){
+    fun return_bids<T: key + store>(market_place: &mut BadaMarketPlace,mut marketplace_item_listing: BadaMarketPlaceItemListing<T>, ctx : &mut TxContext){
         let mut bidders = marketplace_item_listing.bidders;
-
         let mut i = 0;
         while(i < bidders.length()){
             let bidder = bidders.remove(i);
