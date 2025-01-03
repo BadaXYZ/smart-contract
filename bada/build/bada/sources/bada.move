@@ -129,23 +129,6 @@ module bada::bada{
         transfer::share_object(bada_marketplace);
     }
 
-    // public fun create_category(market_place: &mut BadaMarketPlace, name: String, ctx: &mut TxContext){
-    //     assert!(market_place.creator == ctx.sender(), ENotOwner);
-    //     assert!(!dof::exists_(&market_place.id, name), ECategoryExists);
-    //     let category : BadaMarketPlaceCategory = BadaMarketPlaceCategory{
-    //         id: object::new(ctx),
-    //         name,
-    //         items: vector::empty(),
-    //     };
-    //     event::emit(BadaMarketPlaceCategoryCreated {
-    //         id: object::id(&category),
-    //         name: name
-    //     });
-    //     market_place.idx.add(category.id.uid_to_inner(), market_place.categories.length());
-    //     market_place.categories.push_back(category.id.uid_to_inner());
-    //     dof::add(&mut market_place.id, category.id.uid_to_inner(), category); 
-    // }
-
     public fun create_category(market_place: &mut BadaMarketPlace, name: String, ctx: &mut TxContext){
         assert!(market_place.creator == ctx.sender(), ENotOwner);
         assert!(!dof::exists_(&market_place.id, name), ECategoryExists);

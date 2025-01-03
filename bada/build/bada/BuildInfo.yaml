@@ -5,14 +5,14 @@ compiled_package_info:
     bada: "0000000000000000000000000000000000000000000000000000000000000000"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: 677A8B98809F7452068449E38DEF2C570F16059773F1C576B6AC593188323D4B
+  source_digest: BC922BE1E677ED4156DDA0B635F98D14A8A7A71EB4556C3997A751DDC76EA9EB
   build_flags:
-    dev_mode: true
-    test_mode: true
+    dev_mode: false
+    test_mode: false
     generate_docs: false
     install_dir: ~
     force_recompilation: false
-    lock_file: ~
+    lock_file: "./Move.lock"
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: sui
